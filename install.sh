@@ -195,6 +195,193 @@ download_url_to_stdout() {
     return 127
 }
 
+download_url_to_file() {
+    local url="$1"
+    local out_file="$2"
+
+    if command -v curl &>/dev/null; then
+        curl --tlsv1.2 -fsSL "$url" -o "$out_file" 2>/dev/null || curl -fsSL "$url" -o "$out_file"
+        return $?
+    fi
+
+    if command -v wget &>/dev/null; then
+        wget --https-only --secure-protocol=TLSv1_2 -qO "$out_file" "$url" 2>/dev/null || wget -qO "$out_file" "$url"
+        return $?
+    fi
+
+    return 127
+}
+
+detect_node_arch() {
+    local machine_arch=""
+    machine_arch="$(uname -m)"
+    case "$machine_arch" in
+        x86_64|amd64)
+            echo "x64"
+            return 0
+            ;;
+        aarch64|arm64)
+            echo "arm64"
+            return 0
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+get_latest_node_version() {
+    local index_json=""
+    local latest_version=""
+
+    index_json="$(download_url_to_stdout "https://nodejs.org/dist/index.json" 2>/dev/null)" || return 1
+    latest_version="$(printf '%s\n' "$index_json" | grep -oE '"version"[[:space:]]*:[[:space:]]*"v[0-9]+\.[0-9]+\.[0-9]+"' | head -n 1 | sed -E 's/.*"(v[0-9]+\.[0-9]+\.[0-9]+)".*/\1/')"
+    if [ -z "$latest_version" ]; then
+        return 1
+    fi
+
+    echo "$latest_version"
+}
+
+install_nodejs_official_latest() {
+    local platform=""
+    local node_arch=""
+    local latest_version=""
+    local current_version=""
+    local install_root="$HOME/.local/nodejs"
+    local local_bin="$HOME/.local/bin"
+    local target_dir=""
+    local temp_dir=""
+    local extract_dir=""
+    local archive_name=""
+    local archive_url=""
+    local archive_file=""
+    local unpacked_dir=""
+    local node_entry=""
+    local candidate=""
+    local extracted_candidates=()
+
+    case "$OS_TYPE" in
+        Darwin)
+            platform="darwin"
+            ;;
+        Linux)
+            platform="linux"
+            ;;
+        *)
+            echo "WARN: 当前系统不支持自动安装 Node.js 官方包：$OS_TYPE" >&2
+            FAILED_STEPS+=("安装 Node.js 官方最新版 (unsupported-os:$OS_TYPE)")
+            return 0
+            ;;
+    esac
+
+    node_arch="$(detect_node_arch || true)"
+    if [ -z "$node_arch" ]; then
+        echo "WARN: 无法识别架构，跳过 Node.js 安装（uname -m=$(uname -m)）" >&2
+        FAILED_STEPS+=("安装 Node.js 官方最新版 (unsupported-arch)")
+        return 0
+    fi
+
+    latest_version="$(get_latest_node_version || true)"
+    if [ -z "$latest_version" ]; then
+        echo "WARN: 无法获取 Node.js 官方最新版本，跳过安装" >&2
+        FAILED_STEPS+=("安装 Node.js 官方最新版 (version-resolve-failed)")
+        return 0
+    fi
+
+    if command -v node &>/dev/null; then
+        current_version="$(node -v 2>/dev/null || true)"
+    fi
+    if [ "$current_version" = "$latest_version" ] && command -v npm &>/dev/null; then
+        echo "Node.js 已是官方最新版：$current_version"
+        return 0
+    fi
+
+    mkdir -p "$install_root" "$local_bin"
+    target_dir="$install_root/node-$latest_version-$platform-$node_arch"
+    temp_dir="$(mktemp -d 2>/dev/null || mktemp -d -t nodejs-install)"
+    extract_dir="$temp_dir/extract"
+    mkdir -p "$extract_dir"
+
+    for candidate in \
+        "node-$latest_version-$platform-$node_arch.tar.xz" \
+        "node-$latest_version-$platform-$node_arch.tar.gz"; do
+        archive_url="https://nodejs.org/dist/$latest_version/$candidate"
+        archive_file="$temp_dir/$candidate"
+        if download_url_to_file "$archive_url" "$archive_file"; then
+            archive_name="$candidate"
+            break
+        fi
+    done
+
+    if [ -z "$archive_name" ]; then
+        echo "WARN: 下载 Node.js 官方安装包失败（$latest_version/$platform/$node_arch）" >&2
+        FAILED_STEPS+=("安装 Node.js 官方最新版 (download-failed)")
+        rm -rf "$temp_dir"
+        return 0
+    fi
+
+    if [[ "$archive_name" == *.tar.xz ]]; then
+        if ! tar -xJf "$archive_file" -C "$extract_dir"; then
+            echo "WARN: 解压 Node.js 压缩包失败：$archive_name" >&2
+            FAILED_STEPS+=("安装 Node.js 官方最新版 (extract-failed)")
+            rm -rf "$temp_dir"
+            return 0
+        fi
+    else
+        if ! tar -xzf "$archive_file" -C "$extract_dir"; then
+            echo "WARN: 解压 Node.js 压缩包失败：$archive_name" >&2
+            FAILED_STEPS+=("安装 Node.js 官方最新版 (extract-failed)")
+            rm -rf "$temp_dir"
+            return 0
+        fi
+    fi
+
+    unpacked_dir="$extract_dir/node-$latest_version-$platform-$node_arch"
+    if [ ! -d "$unpacked_dir" ]; then
+        mapfile -t extracted_candidates < <(find "$extract_dir" -mindepth 1 -maxdepth 1 -type d 2>/dev/null)
+        if [ ${#extracted_candidates[@]} -gt 0 ]; then
+            unpacked_dir="${extracted_candidates[0]}"
+        fi
+    fi
+
+    if [ ! -d "$unpacked_dir" ]; then
+        echo "WARN: 未找到解压后的 Node.js 目录" >&2
+        FAILED_STEPS+=("安装 Node.js 官方最新版 (missing-unpacked-dir)")
+        rm -rf "$temp_dir"
+        return 0
+    fi
+
+    rm -rf "$target_dir"
+    mv "$unpacked_dir" "$target_dir"
+
+    for node_entry in node npm npx corepack; do
+        if [ -x "$target_dir/bin/$node_entry" ]; then
+            ln -sf "$target_dir/bin/$node_entry" "$local_bin/$node_entry"
+        fi
+    done
+
+    ensure_runtime_path
+
+    if ! command -v node &>/dev/null; then
+        echo "WARN: Node.js 安装后仍不可用（未找到 node 命令）" >&2
+        FAILED_STEPS+=("安装 Node.js 官方最新版 (node-not-found-after-install)")
+        rm -rf "$temp_dir"
+        return 0
+    fi
+
+    current_version="$(node -v 2>/dev/null || true)"
+    if [ "$current_version" != "$latest_version" ]; then
+        echo "WARN: Node.js 安装后版本与预期不一致（当前 $current_version，预期 $latest_version）" >&2
+        FAILED_STEPS+=("安装 Node.js 官方最新版 (version-mismatch:$current_version)")
+        rm -rf "$temp_dir"
+        return 0
+    fi
+
+    echo "Node.js 官方最新版已安装：$current_version"
+    rm -rf "$temp_dir"
+}
+
 # Find working python3 command
 find_python3() {
     local cmd=""
@@ -399,6 +586,7 @@ install_dependencies() {
 run_step "安装系统依赖" install_dependencies
 ensure_runtime_path
 run_step "持久化用户命令目录到 shell 配置" persist_runtime_path
+run_step "检查并安装 Node.js 官方最新版" install_nodejs_official_latest
 
 PIP_INSTALL_CMD=($PYTHON_CMD -m pip install --upgrade)
 if [ "$OS_TYPE" = "Linux" ]; then

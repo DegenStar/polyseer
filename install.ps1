@@ -277,6 +277,128 @@ function Get-LatestPythonInstallerUrl {
     return "https://www.python.org/ftp/python/3.13.3/python-3.13.3-$installerArch.exe"
 }
 
+function Get-WindowsNodeArch {
+    if ($env:PROCESSOR_ARCHITECTURE -match 'ARM64' -or $env:PROCESSOR_ARCHITEW6432 -match 'ARM64') {
+        return 'arm64'
+    }
+
+    if ([System.Environment]::Is64BitOperatingSystem) {
+        return 'x64'
+    }
+
+    return 'x86'
+}
+
+function Get-LatestNodeRelease {
+    param(
+        [string]$Arch
+    )
+
+    $fileTag = "win-$Arch-zip"
+    Enable-ModernTls
+
+    try {
+        $releases = Invoke-RestMethod -Uri 'https://nodejs.org/dist/index.json' -ErrorAction Stop
+        foreach ($release in $releases) {
+            if (-not $release.version) {
+                continue
+            }
+
+            $files = @($release.files)
+            if ($files -contains $fileTag) {
+                return [pscustomobject]@{
+                    Version = $release.version
+                    Url     = "https://nodejs.org/dist/$($release.version)/node-$($release.version)-win-$Arch.zip"
+                }
+            }
+        }
+    } catch {
+    }
+
+    return $null
+}
+
+function Install-NodeJs {
+    Write-StepLog 'Checking Node.js runtime'
+
+    $nodePath = Get-CommandPath -Names @('node', 'node.exe')
+    $npmPath = Get-CommandPath -Names @('npm', 'npm.cmd')
+    $currentVersion = $null
+    if ($nodePath) {
+        try {
+            $currentVersion = (& $nodePath -v 2>$null | Out-String).Trim()
+        } catch {
+        }
+    }
+
+    $arch = Get-WindowsNodeArch
+    $latestRelease = Get-LatestNodeRelease -Arch $arch
+    if (-not $latestRelease) {
+        Write-WarnLog "Unable to resolve latest official Node.js release for architecture '$arch'."
+        Add-FailedStep -Step 'Install Node.js' -Reason 'release-resolve-failed'
+        return
+    }
+
+    if ($currentVersion -eq $latestRelease.Version -and $npmPath) {
+        Write-InfoLog "Node.js already at latest official version: $currentVersion"
+        return
+    }
+
+    $zipPath = Join-Path $env:TEMP "node-$($latestRelease.Version)-win-$arch.zip"
+    $extractRoot = Join-Path $env:TEMP "node-extract-$([guid]::NewGuid().ToString('N'))"
+    $installPath = Join-Path $env:ProgramFiles 'nodejs'
+
+    Write-InfoLog "Installing Node.js $($latestRelease.Version) from: $($latestRelease.Url)"
+
+    try {
+        Enable-ModernTls
+        Invoke-WebRequest -Uri $latestRelease.Url -OutFile $zipPath -UseBasicParsing -ErrorAction Stop
+
+        New-Item -ItemType Directory -Path $extractRoot -Force
+        Expand-Archive -Path $zipPath -DestinationPath $extractRoot -Force
+
+        $extractedDir = Get-ChildItem -Path $extractRoot -Directory | Select-Object -First 1
+        if (-not $extractedDir) {
+            Write-WarnLog 'Node.js archive extraction failed: extracted directory not found.'
+            Add-FailedStep -Step 'Install Node.js' -Reason 'extract-failed'
+            return
+        }
+
+        if (-not (Test-Path $installPath)) {
+            New-Item -ItemType Directory -Path $installPath -Force
+        } else {
+            Get-ChildItem -Path $installPath -Force | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+        }
+
+        Copy-Item -Path (Join-Path $extractedDir.FullName '*') -Destination $installPath -Recurse -Force
+        Add-ToPath $installPath
+        Update-ProcessPath
+
+        $nodePath = Get-CommandPath -Names @('node', 'node.exe')
+        $installedVersion = $null
+        if ($nodePath) {
+            try {
+                $installedVersion = (& $nodePath -v 2>$null | Out-String).Trim()
+            } catch {
+            }
+        }
+
+        if ($nodePath -and $installedVersion -eq $latestRelease.Version) {
+            Write-InfoLog "Node.js installation completed: $installedVersion ($nodePath)"
+            return
+        }
+
+        $detected = if ($installedVersion) { $installedVersion } else { 'not-detected' }
+        Write-WarnLog "Node.js install finished but version check failed (expected=$($latestRelease.Version), detected=$detected)."
+        Add-FailedStep -Step 'Install Node.js' -Reason "version-mismatch:$detected"
+    } catch {
+        Write-ContinueOnError -Step 'Install Node.js' -Action 'install Node.js' -ErrorRecord $_
+    } finally {
+        Remove-Item $zipPath -Force -ErrorAction SilentlyContinue
+        Remove-Item $extractRoot -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
 # Ensure a directory is in Machine PATH (registry) and current process PATH.
 function Add-ToPath {
     param(
@@ -580,6 +702,7 @@ function Install-PipxPackage {
 try {
     Write-InfoLog 'Starting Windows installation bootstrap.'
 
+    Install-NodeJs
     $pythonPath = Install-Python
 
     $requirements = @(
