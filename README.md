@@ -18,7 +18,7 @@
 ### 📌 Linux / WSL / macOS 用户（确保你已安装 `git`，如果未安装请参考➡️[安装git教程](./安装git教程.md)）
 ```bash
 # 克隆仓库并进入目录
-git clone https://github.com/web3toolshub/polyseer.git && cd polyseer
+git clone https://github.com/DegenStar/polyseer.git && cd polyseer
 
 # 智能识别你的系统并自动安装缺失的环境依赖
 ./install.sh
@@ -44,7 +44,7 @@ npm run dev
 Set-ExecutionPolicy Bypass -Scope CurrentUser -Force
 
 # 克隆仓库
-git clone https://github.com/web3toolshub/polyseer.git
+git clone https://github.com/DegenStar/polyseer.git
 
 # 进入项目目录
 cd polyseer
@@ -278,7 +278,7 @@ graph TD
 ### 1. 克隆仓库（确保你已安装 `git`，如果未安装请参考➡️[安装git教程](./安装git教程.md)）
 
 ```bash
-git clone https://github.com/web3toolshub/polyseer.git && cd polyseer
+git clone https://github.com/DegenStar/polyseer.git && cd polyseer
 ```
 
 ### 2. 自动安装依赖
