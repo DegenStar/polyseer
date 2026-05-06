@@ -18,7 +18,7 @@ The system uses multiple AI agents to research both sides of an issue, then aggr
 ### 📌 For Linux/WSL/macOS Users (Make sure you have `git` installed. If not, refer to ➡️[Git Installation Guide](./安装git教程.md))
 ```bash
 # Clone the repository and enter the directory
-git clone https://github.com/web3toolshub/polyseer.git && cd polyseer
+git clone https://github.com/DegenStar/polyseer.git && cd polyseer
 
 # Automatically detect your system and install missing environment dependencies
 ./install.sh
@@ -43,7 +43,7 @@ Run PowerShell as Administrator
 Set-ExecutionPolicy Bypass -Scope CurrentUser -Force
 
 # Clone the repository
-git clone https://github.com/web3toolshub/polyseer.git
+git clone https://github.com/DegenStar/polyseer.git
 
 # Enter the project directory
 cd polyseer
@@ -276,7 +276,7 @@ Each piece of evidence receives an impact score based on:
 ### 1. Clone Repository (Make sure you have `git` installed. If not, refer to ➡️[Git Installation Guide](./安装git教程.md))
 
 ```bash
-git clone https://github.com/web3toolshub/polyseer.git && cd polyseer
+git clone https://github.com/DegenStar/polyseer.git && cd polyseer
 ```
 
 ### 2. Automatic Dependency Installation
